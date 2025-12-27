@@ -1,71 +1,57 @@
-name: Python CI/CD Pipeline (Windows)
+name: Python Tests
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+on: [push, pull_request]
 
 jobs:
-  test-windows:
-    runs-on: windows-latest
-    
-    strategy:
-      matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+  test:
+    runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+    - name: Setup Python
+      uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
-    
-    - name: Create virtual environment
-      run: |
-        python -m venv venv
-    
-    - name: Activate virtual environment
-      run: |
-        venv\Scripts\activate
+        python-version: '3.10'
     
     - name: Install dependencies
       run: |
-        pip install --upgrade pip
-        pip install pynguin pytest mutmut coverage
-        if (Test-Path requirements.txt) { pip install -r requirements.txt }
-    
-    - name: Set environment variable for Pynguin
-      run: |
-        $env:PYNGUIN_DANGER_AWARE = "1"
-        echo "PYNGUIN_DANGER_AWARE=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        python -m pip install --upgrade pip
+        pip install pytest coverage mutmut pynguin
     
     - name: Generate tests with Pynguin
+      env:
+        PYNGUIN_DANGER_AWARE: 1
       run: |
-        pynguin --project-path . --module-name src.wallet --output-path tests --maximum-search-time 60
-      continue-on-error: true
+        pynguin --project-path . --module-name src.wallet --output-path tests --seed 42 || true
     
-    - name: Run pytest
+    - name: Run tests
       run: |
-        pytest tests/
+        pytest tests/ -v
     
-    - name: Run coverage tests
+    - name: Generate coverage report
       run: |
         coverage run --branch -m pytest tests/
         coverage report -m
         coverage xml
     
-    - name: Run mutation testing
+    - name: Run mutation tests
       run: |
-        mutmut run --paths-to-mutate src/wallet.py
-      continue-on-error: true
+        mutmut run --paths-to-mutate src/wallet_system.py --runner "pytest tests/test_src_wallet.py -x" || true
     
-    - name: Generate mutation test report
-      run: |
-        mutmut results
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v4
       with:
-        file: ./coverage.xml
+        name: coverage-report
+        path: |
+          coverage.xml
+          htmlcov/
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          .mutmut-cache/
+          mutation.html
