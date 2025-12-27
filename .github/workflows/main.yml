@@ -1,57 +1,131 @@
-name: Python Tests
+name: Python CI/CD Pipeline
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   test:
     runs-on: ubuntu-24.04
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
     
-    - name: Setup Python
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
+        
+    - name: Configure PYTHONPATH
+      run: |
+        echo "PYTHONPATH=${{ github.workspace }}" >> $GITHUB_ENV
+        echo "Current directory: $(pwd)"
+        echo "Directory structure:"
+        find . -type f -name "*.py" | head -20
+        
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        pip install --upgrade pip
         pip install pytest coverage mutmut pynguin
-    
+        
+    - name: Debug - Show project structure
+      run: |
+        echo "=== Project Structure ==="
+        ls -la
+        echo ""
+        echo "=== src directory ==="
+        ls -la src/ 2>/dev/null || echo "src/ not found"
+        echo ""
+        echo "=== tests directory ==="
+        ls -la tests/ 2>/dev/null || echo "tests/ not found"
+        
+    - name: Fix test imports (if needed)
+      run: |
+        # Corrige imports nos testes gerados
+        if [ -f "tests/test_src_digitalWalletSystem.py" ]; then
+          echo "Fixing imports in test files..."
+          # Opção 1: Alterar import absoluto para relativo
+          sed -i 's/import src.digitalWalletSystem as module_0/from src import digitalWalletSystem as module_0/g' tests/test_src_digitalWalletSystem.py 2>/dev/null || true
+          # Opção 2: Adicionar sys.path
+          sed -i '1i import sys\nsys.path.insert(0, ".")' tests/test_src_digitalWalletSystem.py 2>/dev/null || true
+        fi
+        
     - name: Generate tests with Pynguin
+      continue-on-error: true
       env:
         PYNGUIN_DANGER_AWARE: 1
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        pynguin --project-path . --module-name src.wallet --output-path tests --seed 42 || true
-    
+        # Primeiro verifica se o módulo existe
+        python -c "import sys; sys.path.insert(0, '.'); from src import digitalWalletSystem; print('Module found!')" 2>/dev/null || echo "Module check failed"
+        
+        # Gera testes
+        pynguin --project-path . --module-name src.digitalWalletSystem --output-path tests --seed 42 || echo "Pynguin completed"
+        
     - name: Run tests
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        pytest tests/ -v
-    
-    - name: Generate coverage report
+        echo "Running tests with PYTHONPATH=$PYTHONPATH"
+        pytest tests/ -v --import-mode=append
+        
+    - name: Run coverage
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        coverage run --branch -m pytest tests/
+        coverage run --branch -m pytest tests/ --import-mode=append
         coverage report -m
         coverage xml
-    
-    - name: Run mutation tests
+        
+    - name: Run mutation testing
+      continue-on-error: true
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
-        mutmut run --paths-to-mutate src/wallet_system.py --runner "pytest tests/test_src_wallet.py -x" || true
-    
-    - name: Upload coverage reports
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-report
-        path: |
-          coverage.xml
-          htmlcov/
-    
-    - name: Upload test results
+        mutmut run --paths-to-mutate src/digitalWalletSystem.py --runner "pytest tests/test_src_digitalWalletSystem.py --import-mode=append -x" || true
+        mutmut html
+        
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: test-results
         path: |
-          .mutmut-cache/
+          coverage.xml
+          htmlcov/
           mutation.html
+
+    - name: Generate summary report
+      if: always()
+      run: |
+        echo "# 📈 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Conta testes gerados
+        TEST_COUNT=$(find tests/ -name "*.py" -type f 2>/dev/null | wc -l)
+        echo "## 📊 Statistics" >> $GITHUB_STEP_SUMMARY
+        echo "- Test files generated: $TEST_COUNT" >> $GITHUB_STEP_SUMMARY
+        
+        # Verifica se há arquivos de coverage
+        if [ -f "coverage.xml" ]; then
+          echo "- Coverage report: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- Coverage report: ❌ Not generated" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Verifica se há relatório de mutação
+        if [ -d "mutation-report" ] || [ -f "mutation.html" ]; then
+          echo "- Mutation report: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- Mutation report: ❌ Not generated" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📁 Artifacts Available" >> $GITHUB_STEP_SUMMARY
+        echo "All artifacts are available for download in the Artifacts section." >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## ⚠️ Note" >> $GITHUB_STEP_SUMMARY
+        echo "This pipeline is configured to **not fail** when tests or Pynguin have issues." >> $GITHUB_STEP_SUMMARY
+        echo "Check the artifacts for detailed results." >> $GITHUB_STEP_SUMMARY
