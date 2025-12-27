@@ -95,6 +95,7 @@ jobs:
           coverage.xml
           htmlcov/
           mutation.html
+          tests/
 
     - name: Generate summary report
       if: always()
